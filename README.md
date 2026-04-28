@@ -11,7 +11,7 @@ A production-quality personal expense tracker built with **Next.js 14**, **TypeS
 
 ## Live Demo
 
-> Deployed on Vercel: [link will be added after deployment]
+> **Live Demo:** [https://expenzo-expense-tracker127.vercel.app](https://expenzo-expense-tracker127.vercel.app)
 
 ---
 
@@ -278,4 +278,6 @@ docker compose up --build -d
 
 ## License
 
-MIT
+This project is licensed under the [MIT License](LICENSE).
+
+© 2026 Vinay Surwase

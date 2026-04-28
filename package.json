@@ -2,6 +2,8 @@
   "name": "expense-tracker",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "author": "Vinay Surwase",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
