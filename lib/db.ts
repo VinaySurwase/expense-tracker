@@ -24,8 +24,13 @@ let _db: Database.Database | null = null;
 export function getDb(): Database.Database {
   if (_db) return _db;
 
-  // Read DB_PATH lazily so tests can override it before first call
-  const dbPath = process.env.DB_PATH || path.join(process.cwd(), "expenses.db");
+  // Read DB_PATH lazily so tests can override it before first call.
+  // On Vercel, the filesystem is read-only except /tmp, so default there.
+  const isVercel = process.env.VERCEL === "1";
+  const defaultPath = isVercel
+    ? "/tmp/expenses.db"
+    : path.join(process.cwd(), "expenses.db");
+  const dbPath = process.env.DB_PATH || defaultPath;
   _db = new Database(dbPath);
 
   // Enable WAL mode for better read concurrency
