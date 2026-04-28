@@ -1,21 +1,15 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Expense } from "@/types/expense";
+import { formatCurrency } from "@/lib/format";
 import ExpenseForm from "@/components/ExpenseForm";
 import ExpenseTable from "@/components/ExpenseTable";
 import FilterBar from "@/components/FilterBar";
 import TotalBar from "@/components/TotalBar";
 
-/** Format a number as Indian Rupees. */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
-}
+/** Debounce delay for filter changes (ms). */
+const DEBOUNCE_MS = 300;
 
 export default function HomePage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -25,12 +19,27 @@ export default function HomePage() {
   const [filterCategory, setFilterCategory] = useState("");
   const [sort, setSort] = useState<"date_desc" | "date_asc">("date_desc");
 
+  // Debounced filter category — delays API call until user stops typing/selecting
+  const [debouncedCategory, setDebouncedCategory] = useState("");
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce category changes
+  useEffect(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      setDebouncedCategory(filterCategory);
+    }, DEBOUNCE_MS);
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [filterCategory]);
+
   /** Ref to hold the latest fetch function for child component callbacks. */
   const fetchRef = React.useRef<() => void>(() => {});
 
-  // Fetch on mount and when filters change
+  // Fetch on mount and when filters change (uses debounced category)
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
 
     async function doFetch() {
       setLoading(true);
@@ -38,25 +47,26 @@ export default function HomePage() {
 
       try {
         const params = new URLSearchParams();
-        if (filterCategory) params.set("category", filterCategory);
+        if (debouncedCategory) params.set("category", debouncedCategory);
         params.set("sort", sort);
 
-        const res = await fetch(`/api/expenses?${params.toString()}`);
+        const res = await fetch(`/api/expenses?${params.toString()}`, {
+          signal: controller.signal,
+        });
+
         if (!res.ok) {
           throw new Error(`Failed to fetch expenses (${res.status})`);
         }
 
         const data = await res.json();
-        if (!cancelled) {
-          setExpenses(data.expenses);
-          setTotal(data.total);
-        }
+        setExpenses(data.expenses);
+        setTotal(data.total);
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load expenses");
-        }
+        // Don't set error state for aborted requests
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Failed to load expenses");
       } finally {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setLoading(false);
         }
       }
@@ -65,8 +75,8 @@ export default function HomePage() {
     doFetch();
     fetchRef.current = doFetch;
 
-    return () => { cancelled = true; };
-  }, [filterCategory, sort]);
+    return () => { controller.abort(); };
+  }, [debouncedCategory, sort]);
 
   /** Stable callback for child components to trigger a refetch. */
   const refreshExpenses = useCallback(() => {
@@ -99,6 +109,9 @@ export default function HomePage() {
 
   return (
     <main className="app-container">
+      {/* Skip to content link for keyboard users */}
+      <a href="#expense-form" className="skip-link">Skip to form</a>
+
       {/* Header */}
       <header className="app-header">
         <div className="header-content">
@@ -111,12 +124,12 @@ export default function HomePage() {
       </header>
 
       {/* Form Section */}
-      <section className="section">
+      <section className="section" aria-label="Add new expense">
         <ExpenseForm onSuccess={refreshExpenses} />
       </section>
 
       {/* Filter + Table Section */}
-      <section className="section">
+      <section className="section" aria-label="Expense list">
         <FilterBar
           categories={categories}
           selectedCategory={filterCategory}
@@ -137,7 +150,7 @@ export default function HomePage() {
 
       {/* Category Summary */}
       {!loading && expenses.length > 0 && (
-        <section className="section" id="category-summary">
+        <section className="section" id="category-summary" aria-label="Category summary">
           <h2 className="section-title">Summary by Category</h2>
           <div className="summary-grid">
             {categorySummary.map(({ category, count, subtotal }) => (
@@ -150,7 +163,7 @@ export default function HomePage() {
                 </div>
                 <div className="summary-amount">{formatCurrency(subtotal)}</div>
                 {/* Progress bar showing percentage of total */}
-                <div className="summary-bar-track">
+                <div className="summary-bar-track" role="progressbar" aria-valuenow={Math.round((subtotal / total) * 100)} aria-valuemin={0} aria-valuemax={100}>
                   <div
                     className="summary-bar-fill"
                     style={{

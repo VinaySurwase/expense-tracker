@@ -1,7 +1,64 @@
 import { NextRequest } from "next/server";
-import { createExpense, listExpenses } from "@/lib/expenses";
+import { createExpense, listExpenses, countExpenses, sumExpenses } from "@/lib/expenses";
 import { CreateExpenseSchema, ListExpensesSchema } from "@/lib/validation";
 import { ZodError } from "zod";
+
+/**
+ * Helper to create consistent JSON responses with standard headers.
+ * Eliminates repeated header boilerplate across route handlers.
+ */
+function jsonResponse(data: unknown, status: number) {
+  return Response.json(data, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json",
+    },
+  });
+}
+
+/**
+ * Simple in-memory rate limiter.
+ *
+ * Tracks request counts per IP within a sliding window.
+ * Resets every WINDOW_MS. For production, use Redis-backed rate limiting.
+ */
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 60; // 60 requests per minute
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+
+  entry.count++;
+  return entry.count <= RATE_LIMIT_MAX;
+}
+
+function getClientIp(req: NextRequest): string {
+  return (
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown"
+  );
+}
+
+// Clean up stale rate limit entries every 5 minutes (skip in test env)
+if (typeof process !== "undefined" && process.env.NODE_ENV !== "test") {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of rateLimitMap) {
+      if (now > entry.resetAt) {
+        rateLimitMap.delete(ip);
+      }
+    }
+  }, 5 * 60_000);
+}
 
 /**
  * POST /api/expenses
@@ -9,37 +66,52 @@ import { ZodError } from "zod";
  * Creates a new expense. Supports idempotent retries via the Idempotency-Key header.
  *
  * - 201: Expense created successfully
- * - 200: Duplicate idempotency key — returns existing expense (not newly created)
+ * - 200: Duplicate idempotency key — returns existing expense
+ * - 400: Malformed JSON body
  * - 422: Validation error
+ * - 429: Rate limit exceeded
  * - 500: Internal server error (never leaks stack traces)
  */
 export async function POST(req: NextRequest) {
+  // Rate limit check
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(clientIp)) {
+    return jsonResponse(
+      { error: "Too many requests. Please try again later." },
+      429
+    );
+  }
+
+  // Parse JSON body with specific error for malformed JSON
+  let body: unknown;
   try {
-    const body = await req.json();
+    body = await req.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
 
+  try {
     // Extract idempotency key from header, fall back to body field
-    const idempotencyKey =
-      req.headers.get("Idempotency-Key") || body.idempotencyKey || undefined;
+    const rawBody = body as Record<string, unknown>;
+    const idempotencyKey: string | undefined =
+      req.headers.get("Idempotency-Key") ||
+      (typeof rawBody?.idempotencyKey === "string" ? rawBody.idempotencyKey : undefined);
 
-    const parsed = CreateExpenseSchema.safeParse({ ...body, idempotencyKey });
+    const parsed = CreateExpenseSchema.safeParse({
+      ...(body as Record<string, unknown>),
+      idempotencyKey,
+    });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         { error: "Validation failed", details: parsed.error.issues },
-        {
-          status: 422,
-          headers: {
-            "Cache-Control": "no-store",
-            "Content-Type": "application/json",
-          },
-        }
+        422
       );
     }
 
     const { amount, category, description, date } = parsed.data;
 
-    // Check if this is a duplicate idempotency key by comparing before/after
-    const expense = createExpense({
+    const { expense, wasCreated } = createExpense({
       amount,
       category,
       description,
@@ -47,126 +119,87 @@ export async function POST(req: NextRequest) {
       idempotencyKey,
     });
 
-    // If idempotency key was provided and the expense already existed,
-    // the created_at will differ from "just now". We detect duplicates by
-    // checking if the returned expense's id was generated in this call.
-    // A simpler approach: if idempotencyKey is set, check if the record
-    // existed before our insert. The repository already handles this —
-    // if it returns an existing record, the HTTP status should be 200.
-    //
-    // We determine this by checking if the expense was just created:
-    // If the created_at is within the last 2 seconds, it's new (201).
-    // Otherwise it's an existing duplicate (200).
-    let status = 201;
-    if (idempotencyKey) {
-      const createdAtMs = new Date(expense.created_at).getTime();
-      const nowMs = Date.now();
-      if (nowMs - createdAtMs > 2000) {
-        status = 200; // Existing record returned
-      }
-    }
-
-    return Response.json(expense, {
-      status,
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/json",
-      },
-    });
+    // wasCreated is true for new records (201), false for idempotent duplicates (200)
+    return jsonResponse(expense, wasCreated ? 201 : 200);
   } catch (error) {
     if (error instanceof ZodError) {
-      return Response.json(
+      return jsonResponse(
         { error: "Validation failed", details: error.issues },
-        {
-          status: 422,
-          headers: {
-            "Cache-Control": "no-store",
-            "Content-Type": "application/json",
-          },
-        }
+        422
       );
     }
 
     console.error("POST /api/expenses error:", error);
-    return Response.json(
-      { error: "Internal server error" },
-      {
-        status: 500,
-        headers: {
-          "Cache-Control": "no-store",
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    return jsonResponse({ error: "Internal server error" }, 500);
   }
 }
 
 /**
  * GET /api/expenses
  *
- * Lists expenses with optional category filter and sort direction.
+ * Lists expenses with optional category filter, sort direction, and pagination.
  *
  * Query params:
  *   - category: string (optional) — filter by category
  *   - sort: "date_desc" | "date_asc" (default: "date_desc")
+ *   - limit: number (1-100, default: 50)
+ *   - offset: number (>= 0, default: 0)
  *
  * Response:
- *   - 200: { expenses: Expense[], total: number }
+ *   - 200: { expenses, total, count, limit, offset, hasMore }
  *   - 422: Bad query params
+ *   - 429: Rate limit exceeded
  */
 export async function GET(req: NextRequest) {
+  // Rate limit check
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(clientIp)) {
+    return jsonResponse(
+      { error: "Too many requests. Please try again later." },
+      429
+    );
+  }
+
   try {
     const { searchParams } = new URL(req.url);
     const rawQuery: Record<string, string> = {};
-    
+
     const category = searchParams.get("category");
     const sort = searchParams.get("sort");
-    
+    const limit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
+
     if (category) rawQuery.category = category;
     if (sort) rawQuery.sort = sort;
+    if (limit) rawQuery.limit = limit;
+    if (offset) rawQuery.offset = offset;
 
     const parsed = ListExpensesSchema.safeParse(rawQuery);
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         { error: "Invalid query parameters", details: parsed.error.issues },
-        {
-          status: 422,
-          headers: {
-            "Cache-Control": "no-store",
-            "Content-Type": "application/json",
-          },
-        }
+        422
       );
     }
 
     const expenses = listExpenses(parsed.data);
-    const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+    const count = countExpenses({ category: parsed.data.category });
+    const total = sumExpenses({ category: parsed.data.category });
 
     // Round total to 2 decimal places to avoid floating point artifacts
     const roundedTotal = Math.round(total * 100) / 100;
 
-    return Response.json(
-      { expenses, total: roundedTotal },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store",
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    return jsonResponse({
+      expenses,
+      total: roundedTotal,
+      count,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+      hasMore: parsed.data.offset + expenses.length < count,
+    }, 200);
   } catch (error) {
     console.error("GET /api/expenses error:", error);
-    return Response.json(
-      { error: "Internal server error" },
-      {
-        status: 500,
-        headers: {
-          "Cache-Control": "no-store",
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    return jsonResponse({ error: "Internal server error" }, 500);
   }
 }

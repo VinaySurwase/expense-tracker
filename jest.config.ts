@@ -15,10 +15,20 @@ const config: Config = {
       },
     ],
   },
-  // uuid v14+ is ESM-only — tell Jest to transform it
-  transformIgnorePatterns: [
-    "node_modules/(?!(uuid)/)",
+  // Coverage configuration
+  collectCoverageFrom: [
+    "lib/**/*.ts",
+    "app/api/**/*.ts",
+    "!**/*.d.ts",
   ],
+  coverageThreshold: {
+    global: {
+      branches: 70,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
+  },
 };
 
 export default config;

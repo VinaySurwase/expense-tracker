@@ -16,13 +16,17 @@ export default function FilterBar({
   onSortChange,
 }: FilterBarProps) {
   return (
-    <div className="filter-bar" id="filter-bar">
+    <div className="filter-bar" role="search" aria-label="Filter expenses">
       <div className="filter-group">
-        <label htmlFor="filter-category">Category</label>
+        <label htmlFor="filter-category" className="filter-label">
+          Category
+        </label>
         <select
           id="filter-category"
           value={selectedCategory}
           onChange={(e) => onCategoryChange(e.target.value)}
+          className="filter-select"
+          aria-label="Filter by category"
         >
           <option value="">All Categories</option>
           {categories.map((cat) => (
@@ -33,31 +37,21 @@ export default function FilterBar({
         </select>
       </div>
 
-      <button
-        id="sort-toggle"
-        className="sort-btn"
-        onClick={() =>
-          onSortChange(sort === "date_desc" ? "date_asc" : "date_desc")
-        }
-        title={sort === "date_desc" ? "Showing newest first" : "Showing oldest first"}
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          className={sort === "date_asc" ? "sort-icon-flipped" : ""}
+      <div className="filter-group">
+        <label htmlFor="filter-sort" className="filter-label">
+          Sort
+        </label>
+        <button
+          id="filter-sort"
+          onClick={() =>
+            onSortChange(sort === "date_desc" ? "date_asc" : "date_desc")
+          }
+          className="sort-btn"
+          aria-label={`Sort by date, currently ${sort === "date_desc" ? "newest first" : "oldest first"}`}
         >
-          <path
-            d="M8 3v10M4 9l4 4 4-4"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-        {sort === "date_desc" ? "Newest First" : "Oldest First"}
-      </button>
+          {sort === "date_desc" ? "Newest First ↓" : "Oldest First ↑"}
+        </button>
+      </div>
     </div>
   );
 }

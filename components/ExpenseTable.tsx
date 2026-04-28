@@ -1,26 +1,7 @@
 "use client";
 
 import type { Expense } from "@/types/expense";
-
-/** Format a number as Indian Rupees. */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
-}
-
-/** Format an ISO date string to a readable format. */
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr + "T00:00:00");
-  return new Intl.DateTimeFormat("en-IN", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
+import { formatCurrency, formatDate } from "@/lib/format";
 
 interface ExpenseTableProps {
   expenses: Expense[];
@@ -40,7 +21,7 @@ export default function ExpenseTable({
       <div className="table-error" id="table-error" role="alert">
         <div className="error-icon">⚠️</div>
         <p className="error-message">{error}</p>
-        <button onClick={onRetry} className="retry-btn" id="retry-btn">
+        <button onClick={onRetry} className="retry-btn" id="retry-btn" aria-label="Retry loading expenses">
           Try Again
         </button>
       </div>
@@ -48,21 +29,21 @@ export default function ExpenseTable({
   }
 
   return (
-    <div className="table-container" id="expense-table">
+    <div className="table-container" id="expense-table" role="region" aria-label="Expense list">
       <table>
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Category</th>
-            <th>Description</th>
-            <th className="amount-col">Amount</th>
+            <th scope="col">Date</th>
+            <th scope="col">Category</th>
+            <th scope="col">Description</th>
+            <th scope="col" className="amount-col">Amount</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
             // Skeleton loading rows
             Array.from({ length: 5 }).map((_, i) => (
-              <tr key={`skeleton-${i}`} className="skeleton-row">
+              <tr key={`skeleton-${i}`} className="skeleton-row" aria-hidden="true">
                 <td><div className="skeleton skeleton-text" /></td>
                 <td><div className="skeleton skeleton-text" /></td>
                 <td><div className="skeleton skeleton-text-wide" /></td>
