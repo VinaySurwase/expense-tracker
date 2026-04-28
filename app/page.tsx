@@ -1,65 +1,173 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import type { Expense } from "@/types/expense";
+import ExpenseForm from "@/components/ExpenseForm";
+import ExpenseTable from "@/components/ExpenseTable";
+import FilterBar from "@/components/FilterBar";
+import TotalBar from "@/components/TotalBar";
+
+/** Format a number as Indian Rupees. */
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+export default function HomePage() {
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filterCategory, setFilterCategory] = useState("");
+  const [sort, setSort] = useState<"date_desc" | "date_asc">("date_desc");
+
+  /** Ref to hold the latest fetch function for child component callbacks. */
+  const fetchRef = React.useRef<() => void>(() => {});
+
+  // Fetch on mount and when filters change
+  useEffect(() => {
+    let cancelled = false;
+
+    async function doFetch() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const params = new URLSearchParams();
+        if (filterCategory) params.set("category", filterCategory);
+        params.set("sort", sort);
+
+        const res = await fetch(`/api/expenses?${params.toString()}`);
+        if (!res.ok) {
+          throw new Error(`Failed to fetch expenses (${res.status})`);
+        }
+
+        const data = await res.json();
+        if (!cancelled) {
+          setExpenses(data.expenses);
+          setTotal(data.total);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load expenses");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    doFetch();
+    fetchRef.current = doFetch;
+
+    return () => { cancelled = true; };
+  }, [filterCategory, sort]);
+
+  /** Stable callback for child components to trigger a refetch. */
+  const refreshExpenses = useCallback(() => {
+    fetchRef.current();
+  }, []);
+
+  /** Unique categories extracted from current expense list. */
+  const categories = useMemo(() => {
+    const cats = new Set(expenses.map((e) => e.category));
+    return Array.from(cats).sort();
+  }, [expenses]);
+
+  /** Category summary: group expenses by category with subtotals. */
+  const categorySummary = useMemo(() => {
+    const map = new Map<string, { count: number; subtotal: number }>();
+    for (const expense of expenses) {
+      const existing = map.get(expense.category) || { count: 0, subtotal: 0 };
+      existing.count += 1;
+      existing.subtotal += expense.amount;
+      map.set(expense.category, existing);
+    }
+    return Array.from(map.entries())
+      .map(([category, { count, subtotal }]) => ({
+        category,
+        count,
+        subtotal: Math.round(subtotal * 100) / 100,
+      }))
+      .sort((a, b) => b.subtotal - a.subtotal);
+  }, [expenses]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="app-container">
+      {/* Header */}
+      <header className="app-header">
+        <div className="header-content">
+          <div className="header-icon">💰</div>
+          <div>
+            <h1>Expense Tracker</h1>
+            <p className="header-subtitle">Track your spending, stay in control</p>
+          </div>
+        </div>
+      </header>
+
+      {/* Form Section */}
+      <section className="section">
+        <ExpenseForm onSuccess={refreshExpenses} />
+      </section>
+
+      {/* Filter + Table Section */}
+      <section className="section">
+        <FilterBar
+          categories={categories}
+          selectedCategory={filterCategory}
+          sort={sort}
+          onCategoryChange={setFilterCategory}
+          onSortChange={setSort}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+        <TotalBar total={total} count={expenses.length} />
+
+        <ExpenseTable
+          expenses={expenses}
+          loading={loading}
+          error={error}
+          onRetry={refreshExpenses}
+        />
+      </section>
+
+      {/* Category Summary */}
+      {!loading && expenses.length > 0 && (
+        <section className="section" id="category-summary">
+          <h2 className="section-title">Summary by Category</h2>
+          <div className="summary-grid">
+            {categorySummary.map(({ category, count, subtotal }) => (
+              <div key={category} className="summary-card">
+                <div className="summary-card-header">
+                  <span className="summary-category">{category}</span>
+                  <span className="summary-count">
+                    {count} item{count !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                <div className="summary-amount">{formatCurrency(subtotal)}</div>
+                {/* Progress bar showing percentage of total */}
+                <div className="summary-bar-track">
+                  <div
+                    className="summary-bar-fill"
+                    style={{
+                      width: total > 0 ? `${(subtotal / total) * 100}%` : "0%",
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Footer */}
+      <footer className="app-footer">
+        <p>Built with Next.js, TypeScript & SQLite — storing amounts in paise for precision</p>
+      </footer>
+    </main>
   );
 }
