@@ -44,3 +44,5 @@ expenses.db
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+expenses.db-shm
+expenses.db-wal
