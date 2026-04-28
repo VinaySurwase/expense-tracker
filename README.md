@@ -26,7 +26,7 @@ A production-quality personal expense tracker built with **Next.js 14**, **TypeS
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/expense-tracker.git
+git clone https://github.com/VinaySurwase/expense-tracker.git
 cd expense-tracker
 
 # 2. Install dependencies
