@@ -4,7 +4,7 @@ A production-quality personal expense tracker built with **Next.js 14**, **TypeS
 
 ![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue?logo=typescript)
-![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003B57?logo=sqlite)
+![Turso](https://img.shields.io/badge/Turso-SQLite--Edge-000000?logo=sqlite)
 ![Tests](https://img.shields.io/badge/Tests-35%20passing-green)
 
 ---
@@ -82,7 +82,7 @@ curl http://localhost:3000/api/health  # Verify health
 |---|---|---|
 | **Next.js 14 (App Router)** | Framework | Monorepo — API routes and React UI in a single codebase. Server-side rendering, file-system routing, and Vercel-native deployment. |
 | **TypeScript (strict mode)** | Language | Compile-time type safety, self-documenting interfaces, and zero `any` types throughout. |
-| **SQLite via better-sqlite3** | Database | ACID-compliant, zero-infrastructure, file-based persistence. Perfect for a single-user personal finance tool. |
+| **Turso (@libsql/client)** | Database | Hosted SQLite. ACID-compliant, zero-infrastructure, file-based persistence locally, and serverless persistence on Vercel. |
 | **Zod** | Validation | Runtime schema validation at the API boundary with auto TypeScript type inference. |
 | **Vanilla CSS** | Styling | Premium dark theme with glassmorphism, micro-animations, and full responsive design. |
 
@@ -159,13 +159,12 @@ The POST endpoint supports **idempotent requests** via the `Idempotency-Key` hea
 
 ### Persistence
 
-**Why SQLite:**
+**Why Turso (Hosted SQLite):**
 
 - ACID-compliant with WAL mode for concurrent reads
-- Zero configuration — the database is a single file
-- Repository pattern + adapter pattern make it swappable to PostgreSQL in a one-file change
-
-**Vercel note:** Serverless filesystems are ephemeral. For production, replace with a hosted DB (Turso, Neon, Supabase).
+- Local development requires zero configuration — the database defaults to a single `expenses.db` file.
+- Vercel's serverless filesystem is ephemeral (resets on redeploy). Turso solves this by hosting the SQLite database at the edge, allowing permanent storage while keeping standard SQL syntax.
+- Repository pattern + adapter pattern make it swappable to PostgreSQL in a one-file change if multi-user support is needed.
 
 ---
 
