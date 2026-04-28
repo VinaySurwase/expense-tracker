@@ -1,66 +1,73 @@
-import Database from "better-sqlite3";
-import path from "path";
+import { createClient, type Client } from "@libsql/client";
 
 /**
- * SQLite database singleton.
+ * Database client singleton — Turso (hosted SQLite).
  *
  * Design decisions:
- *   - Uses better-sqlite3 for synchronous, zero-dependency SQLite access.
- *   - DB file path is configurable via the DB_PATH environment variable,
- *     defaulting to ./expenses.db in the project root.
- *   - Schema is created idempotently on first connection (CREATE IF NOT EXISTS).
- *   - WAL journal mode for better concurrent read performance.
+ *   - Uses @libsql/client which supports both local SQLite files and
+ *     Turso hosted databases via the same API.
+ *   - Local dev: uses file:expenses.db (same as before, zero config).
+ *   - Vercel/Production: uses TURSO_DATABASE_URL + TURSO_AUTH_TOKEN.
+ *   - Schema is created idempotently on first connection.
  *
- * Adapter pattern: This module is the single point of contact with SQLite.
- * To swap to PostgreSQL or another backend, only this file and lib/expenses.ts
- * need to change. All consumers depend on the Expense type, not on SQLite.
+ * Adapter pattern: This module is the single point of contact with the database.
+ * All consumers depend on the Expense type, not on the database driver.
  */
 
-let _db: Database.Database | null = null;
+let _client: Client | null = null;
+let _initialized = false;
 
 /**
- * Returns the singleton database instance, initialising the schema on first call.
+ * Returns the singleton database client.
  */
-export function getDb(): Database.Database {
-  if (_db) return _db;
+export function getDb(): Client {
+  if (_client) return _client;
 
-  // Read DB_PATH lazily so tests can override it before first call.
-  // On Vercel, the filesystem is read-only except /tmp, so default there.
-  const isVercel = process.env.VERCEL === "1";
-  const defaultPath = isVercel
-    ? "/tmp/expenses.db"
-    : path.join(process.cwd(), "expenses.db");
-  const dbPath = process.env.DB_PATH || defaultPath;
-  _db = new Database(dbPath);
+  // TURSO_DATABASE_URL for hosted (Vercel), file: URL for local dev.
+  // Tests set TURSO_DATABASE_URL to "file::memory:" for in-memory isolation.
+  const url = process.env.TURSO_DATABASE_URL || "file:expenses.db";
+  const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
 
-  // Enable WAL mode for better read concurrency
-  _db.pragma("journal_mode = WAL");
+  _client = createClient({ url, authToken });
+  return _client;
+}
 
-  // Create schema idempotently
-  _db.exec(`
-    CREATE TABLE IF NOT EXISTS expenses (
-      id              TEXT PRIMARY KEY,
-      amount          INTEGER NOT NULL CHECK(amount > 0),
-      category        TEXT NOT NULL,
-      description     TEXT NOT NULL DEFAULT '',
-      date            TEXT NOT NULL,
-      created_at      TEXT NOT NULL,
-      idempotency_key TEXT UNIQUE
-    );
+/**
+ * Initialize the database schema. Must be called before first query.
+ * Idempotent — safe to call multiple times.
+ */
+export async function initDb(): Promise<void> {
+  if (_initialized) return;
 
-    CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date DESC);
-    CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
-  `);
+  const db = getDb();
 
-  return _db;
+  await db.batch(
+    [
+      `CREATE TABLE IF NOT EXISTS expenses (
+        id              TEXT PRIMARY KEY,
+        amount          INTEGER NOT NULL CHECK(amount > 0),
+        category        TEXT NOT NULL,
+        description     TEXT NOT NULL DEFAULT '',
+        date            TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        idempotency_key TEXT UNIQUE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)`,
+    ],
+    "write"
+  );
+
+  _initialized = true;
 }
 
 /**
  * Close the database connection. Useful for tests and graceful shutdown.
  */
 export function closeDb(): void {
-  if (_db) {
-    _db.close();
-    _db = null;
+  if (_client) {
+    _client.close();
+    _client = null;
+    _initialized = false;
   }
 }

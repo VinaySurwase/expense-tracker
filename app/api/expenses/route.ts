@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
 
     const { amount, category, description, date } = parsed.data;
 
-    const { expense, wasCreated } = createExpense({
+    const { expense, wasCreated } = await createExpense({
       amount,
       category,
       description,
@@ -183,9 +183,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const expenses = listExpenses(parsed.data);
-    const count = countExpenses({ category: parsed.data.category });
-    const total = sumExpenses({ category: parsed.data.category });
+    const expenses = await listExpenses(parsed.data);
+    const count = await countExpenses({ category: parsed.data.category });
+    const total = await sumExpenses({ category: parsed.data.category });
 
     // Round total to 2 decimal places to avoid floating point artifacts
     const roundedTotal = Math.round(total * 100) / 100;

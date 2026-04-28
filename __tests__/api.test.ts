@@ -9,7 +9,7 @@
 import { POST, GET } from "@/app/api/expenses/route";
 import { NextRequest } from "next/server";
 
-// Mock the expenses module
+// Mock the expenses module — all functions return Promises now
 jest.mock("@/lib/expenses", () => ({
   createExpense: jest.fn(),
   listExpenses: jest.fn(),
@@ -68,7 +68,7 @@ describe("POST /api/expenses", () => {
       created_at: new Date().toISOString(),
     };
 
-    mockCreateExpense.mockReturnValue({ expense: mockExpense, wasCreated: true });
+    mockCreateExpense.mockResolvedValue({ expense: mockExpense, wasCreated: true });
 
     const req = createPostRequest({
       amount: 49.99,
@@ -96,7 +96,7 @@ describe("POST /api/expenses", () => {
       created_at: new Date().toISOString(),
     };
 
-    mockCreateExpense.mockReturnValue({ expense: mockExpense, wasCreated: false });
+    mockCreateExpense.mockResolvedValue({ expense: mockExpense, wasCreated: false });
 
     const req = createPostRequest(
       { amount: 49.99, category: "Food & Dining", date: "2024-01-15" },
@@ -186,7 +186,7 @@ describe("POST /api/expenses", () => {
       created_at: new Date().toISOString(),
     };
 
-    mockCreateExpense.mockReturnValue({ expense: mockExpense, wasCreated: true });
+    mockCreateExpense.mockResolvedValue({ expense: mockExpense, wasCreated: true });
 
     const req = createPostRequest(
       { amount: 10, category: "Other", date: "2024-01-01" },
@@ -201,9 +201,7 @@ describe("POST /api/expenses", () => {
   });
 
   it("returns 500 on unexpected error", async () => {
-    mockCreateExpense.mockImplementation(() => {
-      throw new Error("DB connection failed");
-    });
+    mockCreateExpense.mockRejectedValue(new Error("DB connection failed"));
 
     const req = createPostRequest({
       amount: 10,
@@ -227,9 +225,9 @@ describe("GET /api/expenses", () => {
       { id: "2", amount: 200, category: "Transport", description: "", date: "2024-01-20", created_at: "" },
     ];
 
-    mockListExpenses.mockReturnValue(mockExpenses);
-    mockCountExpenses.mockReturnValue(5);
-    mockSumExpenses.mockReturnValue(300);
+    mockListExpenses.mockResolvedValue(mockExpenses);
+    mockCountExpenses.mockResolvedValue(5);
+    mockSumExpenses.mockResolvedValue(300);
 
     const req = createGetRequest();
     const res = await GET(req);
@@ -245,9 +243,9 @@ describe("GET /api/expenses", () => {
   });
 
   it("with category filter calls listExpenses correctly", async () => {
-    mockListExpenses.mockReturnValue([]);
-    mockCountExpenses.mockReturnValue(0);
-    mockSumExpenses.mockReturnValue(0);
+    mockListExpenses.mockResolvedValue([]);
+    mockCountExpenses.mockResolvedValue(0);
+    mockSumExpenses.mockResolvedValue(0);
 
     const req = createGetRequest({ category: "Food & Dining" });
     await GET(req);
@@ -265,9 +263,9 @@ describe("GET /api/expenses", () => {
   });
 
   it("returns empty array when no expenses", async () => {
-    mockListExpenses.mockReturnValue([]);
-    mockCountExpenses.mockReturnValue(0);
-    mockSumExpenses.mockReturnValue(0);
+    mockListExpenses.mockResolvedValue([]);
+    mockCountExpenses.mockResolvedValue(0);
+    mockSumExpenses.mockResolvedValue(0);
 
     const req = createGetRequest();
     const res = await GET(req);

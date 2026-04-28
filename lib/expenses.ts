@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { getDb } from "./db";
+import { getDb, initDb } from "./db";
 import type { Expense, CreateExpenseInput, ListFilters } from "@/types/expense";
 
 /**
@@ -16,7 +16,7 @@ import type { Expense, CreateExpenseInput, ListFilters } from "@/types/expense";
  *   - Returns { expense, wasCreated } so the caller can set the correct HTTP status.
  */
 
-/** Row shape as stored in SQLite (amount in paise). */
+/** Row shape as returned by @libsql/client (amount in paise). */
 interface ExpenseRow {
   id: string;
   amount: number;
@@ -37,28 +37,29 @@ export interface CreateExpenseResult {
 function rowToExpense(row: ExpenseRow): Expense {
   return {
     id: row.id,
-    amount: row.amount / 100,
-    category: row.category,
-    description: row.description,
-    date: row.date,
-    created_at: row.created_at,
+    amount: Number(row.amount) / 100,
+    category: String(row.category),
+    description: String(row.description),
+    date: String(row.date),
+    created_at: String(row.created_at),
   };
 }
 
 /**
  * Create a new expense atomically.
  *
- * Uses a transaction with INSERT ON CONFLICT to eliminate TOCTOU race conditions.
+ * Uses INSERT ON CONFLICT to eliminate TOCTOU race conditions.
  *
  * @param input - The expense data with amount in decimal rupees.
  * @returns { expense, wasCreated } — wasCreated is false for idempotent duplicates.
  * @throws If amount <= 0.
  */
-export function createExpense(input: CreateExpenseInput): CreateExpenseResult {
+export async function createExpense(input: CreateExpenseInput): Promise<CreateExpenseResult> {
   if (input.amount <= 0) {
     throw new Error("Amount must be positive");
   }
 
+  await initDb();
   const db = getDb();
   const id = crypto.randomUUID();
   const amountPaise = Math.round(input.amount * 100);
@@ -68,58 +69,56 @@ export function createExpense(input: CreateExpenseInput): CreateExpenseResult {
 
   // If no idempotency key, just insert directly (no dedup needed).
   if (!idempotencyKey) {
-    const stmt = db.prepare(`
-      INSERT INTO expenses (id, amount, category, description, date, created_at, idempotency_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(id, amountPaise, input.category, description, input.date, createdAt, null);
+    await db.execute({
+      sql: `INSERT INTO expenses (id, amount, category, description, date, created_at, idempotency_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, amountPaise, input.category, description, input.date, createdAt, null],
+    });
 
-    const inserted = db
-      .prepare("SELECT * FROM expenses WHERE id = ?")
-      .get(id) as ExpenseRow;
+    const result = await db.execute({
+      sql: "SELECT * FROM expenses WHERE id = ?",
+      args: [id],
+    });
 
-    return { expense: rowToExpense(inserted), wasCreated: true };
+    return { expense: rowToExpense(result.rows[0] as unknown as ExpenseRow), wasCreated: true };
   }
 
   // With idempotency key — use a transaction to atomically check + insert.
-  // INSERT ON CONFLICT DO NOTHING prevents the TOCTOU race condition:
-  // even if two requests arrive simultaneously, only one will insert.
-  const result = db.transaction(() => {
-    const insertStmt = db.prepare(`
-      INSERT INTO expenses (id, amount, category, description, date, created_at, idempotency_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(idempotency_key) DO NOTHING
-    `);
+  const tx = await db.transaction("write");
 
-    const info = insertStmt.run(
-      id, amountPaise, input.category, description, input.date, createdAt, idempotencyKey
-    );
+  try {
+    const insertResult = await tx.execute({
+      sql: `INSERT INTO expenses (id, amount, category, description, date, created_at, idempotency_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(idempotency_key) DO NOTHING`,
+      args: [id, amountPaise, input.category, description, input.date, createdAt, idempotencyKey],
+    });
 
-    // info.changes === 1 means a new row was inserted.
-    // info.changes === 0 means ON CONFLICT fired — row already existed.
-    const wasCreated = info.changes === 1;
+    const wasCreated = insertResult.rowsAffected > 0;
 
     // Always fetch by idempotency_key to return the canonical row.
-    const row = db
-      .prepare("SELECT * FROM expenses WHERE idempotency_key = ?")
-      .get(idempotencyKey) as ExpenseRow;
+    const selectResult = await tx.execute({
+      sql: "SELECT * FROM expenses WHERE idempotency_key = ?",
+      args: [idempotencyKey],
+    });
 
-    return { expense: rowToExpense(row), wasCreated };
-  })();
+    await tx.commit();
 
-  return result;
+    return { expense: rowToExpense(selectResult.rows[0] as unknown as ExpenseRow), wasCreated };
+  } catch (error) {
+    await tx.rollback();
+    throw error;
+  }
 }
 
 /**
  * List expenses with optional filtering, sorting, and pagination.
- *
- * @param filters - Optional category filter, sort direction, limit, and offset.
- * @returns Array of Expense objects with amounts in decimal rupees.
  */
-export function listExpenses(filters: ListFilters = {}): Expense[] {
+export async function listExpenses(filters: ListFilters = {}): Promise<Expense[]> {
+  await initDb();
   const db = getDb();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: (string | number)[] = [];
 
   if (filters.category) {
     conditions.push("category = ?");
@@ -134,17 +133,18 @@ export function listExpenses(filters: ListFilters = {}): Expense[] {
   const query = `SELECT * FROM expenses ${where} ORDER BY date ${orderDir}, created_at ${orderDir} LIMIT ? OFFSET ?`;
   params.push(limit, offset);
 
-  const rows = db.prepare(query).all(...params) as ExpenseRow[];
-  return rows.map(rowToExpense);
+  const result = await db.execute({ sql: query, args: params });
+  return (result.rows as unknown as ExpenseRow[]).map(rowToExpense);
 }
 
 /**
  * Count total expenses matching filters (for pagination metadata).
  */
-export function countExpenses(filters: Pick<ListFilters, "category"> = {}): number {
+export async function countExpenses(filters: Pick<ListFilters, "category"> = {}): Promise<number> {
+  await initDb();
   const db = getDb();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: string[] = [];
 
   if (filters.category) {
     conditions.push("category = ?");
@@ -152,18 +152,23 @@ export function countExpenses(filters: Pick<ListFilters, "category"> = {}): numb
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const row = db.prepare(`SELECT COUNT(*) as count FROM expenses ${where}`).get(...params) as { count: number };
-  return row.count;
+  const result = await db.execute({
+    sql: `SELECT COUNT(*) as count FROM expenses ${where}`,
+    args: params,
+  });
+
+  return Number(result.rows[0].count);
 }
 
 /**
- * Get the sum of all expenses matching filters (for the total display).
+ * Get the sum of all expenses matching filters.
  * Returns the sum in decimal rupees.
  */
-export function sumExpenses(filters: Pick<ListFilters, "category"> = {}): number {
+export async function sumExpenses(filters: Pick<ListFilters, "category"> = {}): Promise<number> {
+  await initDb();
   const db = getDb();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: string[] = [];
 
   if (filters.category) {
     conditions.push("category = ?");
@@ -171,6 +176,10 @@ export function sumExpenses(filters: Pick<ListFilters, "category"> = {}): number
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const row = db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses ${where}`).get(...params) as { total: number };
-  return row.total / 100;
+  const result = await db.execute({
+    sql: `SELECT COALESCE(SUM(amount), 0) as total FROM expenses ${where}`,
+    args: params,
+  });
+
+  return Number(result.rows[0].total) / 100;
 }

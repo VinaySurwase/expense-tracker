@@ -1,9 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Prevent Next.js from bundling the native C++ addon — it must be loaded at runtime.
-  serverExternalPackages: ["better-sqlite3"],
-
   // Rewrite /expenses → /api/expenses so both paths work.
   // The assignment specifies POST/GET /expenses; Next.js convention uses /api/.
   async rewrites() {
